@@ -3,7 +3,6 @@ from flask_bcrypt import Bcrypt
 import globals
 from flask_cors import CORS
 
-
 app = Flask(__name__)
 CORS(app)
 bcrypt = Bcrypt(app)

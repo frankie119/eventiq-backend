@@ -75,4 +75,3 @@ def fetch_skiddle_events():
 if __name__ == "__main__":
     fetch_skiddle_events()
 
-9
