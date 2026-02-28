@@ -54,6 +54,7 @@ def show_all_events():
     for event in events.find().skip(page_start).limit(page_size):
         event['_id'] = str(event['_id'])
         event['tickets_left'] = event.get('total_tickets', 100) - event.get('tickets_sold', 0)
+        event['image'] = event.get('image') or 'https://images.unsplash.com/photo-1540039155733-d7696e8abf5f?q=80&w=800&auto=format&fit=crop'
         data_to_return.append(event)
 
     return make_response(jsonify({
@@ -73,10 +74,29 @@ def show_one_event(event_id):
         return make_response(jsonify({"error": "Event not found"}), 404)
     event["_id"] = str(event["_id"])
     event['tickets_left'] = event.get('total_tickets', 100) - event.get('tickets_sold', 0)
+    event['image'] = event.get('image') or 'https://images.unsplash.com/photo-1540039155733-d7696e8abf5f?q=80&w=1600&auto=format&fit=crop'
     return make_response(jsonify(event), 200)
 
+@events_bp.route("/api/v1.0/events/<id>/book", methods=["POST"])
+def book_ticket(id):
+    event = events.find_one({"_id": ObjectId(id)})
+
+    if not event:
+        return make_response(jsonify({"error": "Event not found"}), 404)
+    tickets_sold = event.get("tickets_sold", 0)
+    total_tickets = event.get("total_tickets", 100)
+
+    if tickets_sold >= total_tickets:
+        return make_response(jsonify({"error": "Sorry, this event is sold out!"}), 400)
+    
+    events.update_one(
+        {"_id": ObjectId(id)},
+        {"$inc": {"tickets_sold": 1}}
+    )
+    return make_response(jsonify({"message": "Ticket booked successfully!"}), 200)
+
 @events_bp.route("/api/v1.0/events/recommend", methods=["POST"])
-def recommend_events():
+def recommend_events(): 
     user_interests = request.json.get("interests", [])
 
     if not user_interests:
@@ -122,6 +142,7 @@ def trending_events():
     trending_list = []
     for event in trending_cursor:
         event["_id"] = str(event["_id"])
+        event['image'] = event.get('image') or 'https://images.unsplash.com/photo-1540039155733-d7696e8abf5f?q=80&w=800&auto=format&fit=crop'
         trending_list.append(event)
     return jsonify(trending_list), 200
 
