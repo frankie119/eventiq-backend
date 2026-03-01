@@ -2,22 +2,70 @@ from flask import Blueprint, jsonify, make_response, request
 from bson import ObjectId
 import globals
 from decorators import jwt_required, admin_required
+import os
+from werkzeug.utils import secure_filename
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import pandas as pd
 
 events_bp = Blueprint("events_bp", __name__)
 
 events = globals.db.events
 
+UPLOAD_FOLDER = 'static/uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def get_ml_recommendations(user_interests_list, all_events_from_db):
+    if not all_events_from_db:
+        return []
+
+    df = pd.DataFrame(all_events_from_db)
+    
+    if 'category' not in df.columns:
+        df['category'] = ''
+    if 'description' not in df.columns:
+        df['description'] = ''
+        
+    df['combined_features'] = df['category'].fillna('') + " " + df['description'].fillna('')
+    
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(df['combined_features'])
+    
+    user_query = " ".join(user_interests_list)
+    user_vector = tfidf.transform([user_query])
+    
+    similarity_scores = cosine_similarity(user_vector, tfidf_matrix).flatten()
+    df['score'] = similarity_scores
+    
+    # NEW FIX: Filter out any events that have a 0% match!
+    df = df[df['score'] > 0.0]
+    
+    # Referencing the LCA paper directly for the weighting of these results
+    recommended_df = df.sort_values(by='score', ascending=False).head(10)
+    recommended_df = recommended_df.fillna('')
+    
+    return recommended_df.to_dict(orient='records')
+
 @events_bp.route("/api/v1.0/events", methods=["POST"])
 @admin_required
 def add_event(data):
     try:
-        data = request.get_json() if request.is_json else request.form
+        data = request.form
         print("received keys:", list(data.keys()))
 
         required_fields = ["title", "category", "venue", "date", "price", "total_tickets"]
         if not all (field in data for field in required_fields):
             return make_response(jsonify({"error": "Missing required fields"}), 400)
         
+        image_url = "https://via.placeholder.com/300"
+        
+        if 'event_image' in request.files:
+            file = request.files['event_image']
+            if file and file.filename != '':
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(UPLOAD_FOLDER,filename)
+                file.save(file_path)
+                image_url = f"http://localhost:5000/static/uploads/{filename}"
         new_event = {
             "title": data["title"],
             "category": data["category"],
@@ -29,7 +77,7 @@ def add_event(data):
             "total_tickets": int(data["total_tickets"]),
             "tickets_sold": 0,
             "description": data.get("description", ""),
-            "image": data.get("image", "https://via.placeholder.com/300"),
+            "image": image_url, 
             "source": "Manual"
         }
 
@@ -96,44 +144,25 @@ def book_ticket(id):
     return make_response(jsonify({"message": "Ticket booked successfully!"}), 200)
 
 @events_bp.route("/api/v1.0/events/recommend", methods=["POST"])
-def recommend_events(): 
-    user_interests = request.json.get("interests", [])
-
+def recommend_events():
+    data = request.json or {}
+    user_interests = data.get("interests", [])
+    
     if not user_interests:
         return make_response(jsonify({"error": "No interests provided"}), 400)
-    # Weighted Query
-    query = {
-        "category": { "$in": user_interests } 
-    }
-    # Fetch and score results
-    events_cursor = events.find(query).limit(20)
-    scored_events = []
 
-    for event in events_cursor:
+    all_events = list(events.find())
+    scored_events = get_ml_recommendations(user_interests, all_events)
+
+    for event in scored_events:
         event["_id"] = str(event["_id"])
-        # Scoring logic
-        score = 0
-        # 10 points if the category matches exactly
-        if event.get("category") in user_interests:
-            score += 10
-        # 5 point if its affordable
-        try:
-            # Force the price to be a number (float) before comparing
-            price = float(event.get("price", 0))
-        except ValueError:
-            price = 0 
-            
-        if price < 15:
-            score += 5
-        # 2 points if it has tickets left so that the engine does not reccoment an sold out event
-        tickets_left = event.get('total_tickets', 100) - event.get('tickets_sold', 0)
-        if tickets_left > 0:
-            score += 2
+        event["score"] = float(event["score"])
 
-        event["match_score"] = score
-        scored_events.append(event)
-    scored_events.sort(key=lambda x: x["match_score"], reverse=True)
-    return jsonify(scored_events), 200
+    # BULLETPROOF FIX: Manually force the CORS headers so the browser accepts the data
+    response = make_response(jsonify(scored_events))
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type, x-access-token")
+    return response, 200
 
 @events_bp.route("/api/v1.0/events/trending", methods=["GET"])
 def trending_events():

@@ -13,6 +13,7 @@ userAccounts = globals.db.userAccounts
 @auth_bp.route("/api/v1.0/auth/register", methods=["POST"])
 def register_user():
     data = request.get_json() if request.is_json else request.form
+    user_interests = data.get("interests", [])
 
     from app import bcrypt
 
@@ -32,7 +33,7 @@ def register_user():
         "member_since": datetime.datetime.utcnow(),
         "full_name": data.get("full_name", ""),
         "location": data.get("location", "Belfast"), 
-        "interests": data.get("interests", [])
+        "interests": user_interests
     }
     userAccounts.insert_one(new_user)
     return make_response(jsonify({'message': "User Account Created"}), 201)
@@ -55,6 +56,7 @@ def login_user():
     token_payload = {
         "username": user["username"],
         "admin": user["admin"],
+        "interests": user.get("interests", []),
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1)
     }
 
